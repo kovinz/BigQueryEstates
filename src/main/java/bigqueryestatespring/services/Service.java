@@ -16,35 +16,70 @@ import java.util.List;
 import java.util.UUID;
 
 public class Service {
-    public static BigQuery getBigQueryInstance() {
+    private static String PATH_TO_CREDENTIALS = "/Users/rneviantsev/GridDynamics/serviceAccount/rockStartCred.json";
+    private List<String> columnNames;
+    private OperationType operationType;
+    private String alias;
+
+    public Service(List<String> columnNames, OperationType operationType) {
+        this.columnNames = columnNames;
+        this.operationType = operationType;
+        this.alias = operationType.getStringValue().toLowerCase() + '_' + columnNames.get(columnNames.size() - 1);
+    }
+
+    /**
+     * Gets bigQuery instance with credentials for estates project
+     *
+     * @return bigQuery instance
+     */
+    private BigQuery getBigQueryInstance() {
         try {
             return BigQueryOptions.newBuilder()
                     .setCredentials(
                             ServiceAccountCredentials
-                                    .fromStream(new FileInputStream("/Users/rneviantsev/GridDynamics/serviceAccount/rockStartCred.json"))
+                                    .fromStream(new FileInputStream(PATH_TO_CREDENTIALS))
                     ).build().getService();
         } catch (FileNotFoundException ex) {
             ex.printStackTrace();
-            throw new RuntimeException(ExceptionMessage.CREDENTIALS_FILE_NOT_FOUND);
         } catch (IOException ex) {
             ex.printStackTrace();
-            throw new RuntimeException(ExceptionMessage.EXCEPTION_WHILE_READING_CREDENTIALS);
         }
+        return null;
     }
 
-    public static QueryJobConfiguration getQueryJobConfiguration(int bottom, int top) {
-        return QueryJobConfiguration.newBuilder(
-                "SELECT operation, property_type, country_name, state_name, AVG(price) AS avg_price " +
-                        "FROM `properati-data-public.properties_ar.properties_rent_201501` " +
-                        "WHERE (surface_covered_in_m2 >= " + bottom + " AND surface_covered_in_m2 <= " + top + ") " +
-                        "OR (surface_covered_in_m2 IS NULL)" +
-                        "GROUP BY operation, property_type, country_name, state_name ")
-                .setUseLegacySql(false)
-                .build();
+    private QueryJobConfiguration getQueryJobConfiguration(int bottom, int top) {
+        StringBuilder queryStrBuilder = new StringBuilder("SELECT ");
+        for (String columnName: columnNames.subList(0, columnNames.size() - 1)) {
+            queryStrBuilder.append(columnName).append(", ");
+        }
+        queryStrBuilder.append(operationType.getStringValue()).append('(')
+                .append(columnNames.get(columnNames.size() - 1)).append(')')
+                .append(" AS ").append(alias).append(' ')
+                .append("FROM `properati-data-public.properties_ar.properties_rent_201501` ")
+                .append("WHERE (surface_covered_in_m2 >= ")
+                .append(bottom)
+                .append(" AND surface_covered_in_m2 <= ")
+                .append(top)
+                .append(") ")
+                .append("OR (surface_covered_in_m2 IS NULL) ")
+                .append("GROUP BY ")
+                .append(columnNames.get(0));
+        for (String columnName: columnNames.subList(1, columnNames.size() - 1)) {
+            queryStrBuilder.append(", ").append(columnName);
+        }
+
+        String queryStr = queryStrBuilder.toString();
+        return QueryJobConfiguration
+                    .newBuilder(queryStr)
+                    .setUseLegacySql(false)
+                    .build();
     }
 
-    public static TableResult getTableResultOfEstates(int bottom, int top) {
+    private TableResult getTableResultOfEstates(int bottom, int top) {
         BigQuery bigquery = getBigQueryInstance();
+        if (bigquery == null) {
+            return null;
+        }
 
         QueryJobConfiguration queryConfig = getQueryJobConfiguration(bottom, top);
 
@@ -71,16 +106,36 @@ public class Service {
         throw new RuntimeException(ExceptionMessage.ERROR_WHILE_PROCESSING_QUERY);
     }
 
-    public static Node createTree(TableResult tableResult) {
+    /**
+     * Creates tree based on given tableResult
+     * Levels of tree are based on columnNames given in construction
+     * Aggregation function is given in constructor (OperationType)
+     *
+     * @param tableResult query result received from bigQuery
+     * @return root node of constructed tree
+     */
+    private Node createTree(TableResult tableResult) {
+        if (tableResult == null) {
+            return null;
+        }
         NodeWithChildren root = new NodeWithChildren("");
-        List<String> columnNames = List.of("operation", "property_type", "country_name", "state_name",  "avg_price");
+//        List<String> columnNames = List.of("operation", "property_type", "country_name", "state_name",  "avg_price");
 
-        tableResult.iterateAll().forEach(row -> createBranch(root, columnNames, row));
+        tableResult.iterateAll().forEach(row -> createBranch(root, row));
 
         return root;
     }
 
-    private static void createBranch(NodeWithChildren current, List<String> columnNames, FieldValueList row) {
+    /**
+     * Creates branch of tree starting from root == current.
+     * If value of row on the same level is present then doesn't create new,
+     *  if not present then creates new value on this level;
+     * always create new value on the last level of tree.
+     *
+     * @param current starting node (== root)
+     * @param row - row from TableResult with values for particular row in query result from database
+     */
+    private void createBranch(NodeWithChildren current, FieldValueList row) {
         boolean exists;
         String columnValue;
         // Go through all column names except for the last one
@@ -103,11 +158,17 @@ public class Service {
             }
         }
         // Last element is processed outside 'for' because we want to create different type of Node
-        columnValue = row.get(columnNames.get(columnNames.size() - 1)).getStringValue();
+        columnValue = row.get(alias).getStringValue();
         current.addChild(new PriceNode(columnValue));
     }
 
-    public static Object constructJson(Node root) {
+    /**
+     * Creates Object which can be serialized to json tree
+     *
+     * @param root element from which the tree starts
+     * @return Object which serializes to json consisting tree when returned with REST
+     */
+    private Object constructJson(Node root) {
         try {
             ObjectMapper mapper = new ObjectMapper();
             String json = mapper.writeValueAsString(root);
@@ -119,10 +180,17 @@ public class Service {
         return null;
     }
 
-    public static Object getEstates(int bottom, int top) {
+    /**
+     * Main method - gets tree with levels of columnNames with estates restricted by space by bottom and top
+     *
+     * @param bottom low border of space for estate
+     * @param top high border of space for estate
+     * @return Object which serializes to tree json
+     */
+    public Object getEstates(int bottom, int top) {
         TableResult result = getTableResultOfEstates(bottom, top);
 
         Node root = createTree(result);
-        return Service.constructJson(root);
+        return constructJson(root);
     }
 }
