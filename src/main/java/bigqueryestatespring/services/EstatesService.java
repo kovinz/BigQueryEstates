@@ -22,7 +22,7 @@ import static bigqueryestatespring.exceptionMessages.ExceptionMessage.*;
 import static bigqueryestatespring.services.PropertiesAttribute.*;
 
 public class EstatesService implements Service {
-    private static String PATH_TO_CREDENTIALS = "/Users/rneviantsev/GridDynamics/serviceAccount/rockStartCred.json";
+    private static String PATH_TO_CREDENTIALS = System.getenv("PATH_TO_GCLOUD_CREDENTIALS");
     // list of columns to create tree
     private List<String> columnNames = Arrays.asList(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
     // aggregate function to process the last element
