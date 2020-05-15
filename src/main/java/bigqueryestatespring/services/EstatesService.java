@@ -13,22 +13,25 @@ import com.google.cloud.bigquery.*;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static bigqueryestatespring.exceptionMessages.ExceptionMessage.*;
-import static bigqueryestatespring.services.PropertiesAttribute.PRICE;
+import static bigqueryestatespring.services.PropertiesAttribute.*;
 
 public class EstatesService implements Service {
     private static String PATH_TO_CREDENTIALS = "/Users/rneviantsev/GridDynamics/serviceAccount/rockStartCred.json";
     // list of columns to create tree
-    private List<String> columnNames;
+    private List<String> columnNames = Arrays.asList(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
     // aggregate function to process the last element
     private OperationType operationType = OperationType.AVERAGE;
     // last element of the tree (will be processed in aggregate function)
     private String aggregateColumn = PRICE;
     private String alias = operationType.getStringValue().toLowerCase() + '_' + aggregateColumn;
+
+    public EstatesService() {}
 
     /**
      *
@@ -243,5 +246,46 @@ public class EstatesService implements Service {
 
     public void setAggregateColumn(String aggregateColumn) {
         this.aggregateColumn = aggregateColumn;
+    }
+
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    public static final class Builder {
+        // list of columns to create tree
+        private List<String> columnNames = Arrays.asList(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
+        // aggregate function to process the last element
+        private OperationType operationType = OperationType.AVERAGE;
+        // last element of the tree (will be processed in aggregate function)
+        private String aggregateColumn = PRICE;
+
+        private Builder() {
+        }
+
+        public static Builder anEstatesService() {
+            return new Builder();
+        }
+
+        public Builder withColumnNames(List<String> columnNames) {
+            this.columnNames = columnNames;
+            return this;
+        }
+
+        public Builder withOperationType(OperationType operationType) {
+            this.operationType = operationType;
+            return this;
+        }
+
+        public Builder withAggregateColumn(String aggregateColumn) {
+            this.aggregateColumn = aggregateColumn;
+            return this;
+        }
+
+        public EstatesService build() {
+            EstatesService estatesService = new EstatesService(columnNames, operationType);
+            estatesService.setAggregateColumn(aggregateColumn);
+            return estatesService;
+        }
     }
 }

@@ -11,6 +11,8 @@ import static bigqueryestatespring.exceptionMessages.ExceptionMessage.TOP_BORDER
 import static org.hamcrest.CoreMatchers.notNullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,14 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class EstatesServiceTests {
     @Test
     public void getEstatesTestWithCorrectParameters() {
-        Service service = new EstatesService(List.of(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME),
-                OperationType.AVERAGE);
-        assertThat(service.getData(0, Integer.MAX_VALUE), notNullValue());
-    }
-
-    @Test
-    public void getEstatesTestWithDefaultOperation() {
-        Service service = new EstatesService(List.of(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME));
+        Service service = new EstatesService();
         assertThat(service.getData(0, Integer.MAX_VALUE), notNullValue());
     }
 
@@ -42,7 +37,7 @@ public class EstatesServiceTests {
 
     @Test
     public void getEstatesTestWithOneColumn() {
-        List<String> columnNames = List.of(OPERATION);
+        List<String> columnNames = Arrays.asList(OPERATION);
         Service service = new EstatesService(columnNames, OperationType.AVERAGE);
         JsonNode jsonNode = service.getData(0, Integer.MAX_VALUE).get();
 
@@ -55,15 +50,14 @@ public class EstatesServiceTests {
 
     @Test
     public void getEstatesTestWithTopUnderBottom() {
-        Service service = new EstatesService(List.of(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME),
-                OperationType.AVERAGE);
+        Service service = new EstatesService();
         Exception exception = assertThrows(RuntimeException.class, () -> service.getData(1000, 10));
         assertTrue(exception.getMessage().contains(TOP_BORDER_UNDER_BOTTOM_BORDER));
     }
 
     @Test
     public void getEstatesTestPriceExists() {
-        List<String> columnNames = List.of(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
+        List<String> columnNames = Arrays.asList(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
         Service service = new EstatesService(columnNames, OperationType.AVERAGE);
         JsonNode jsonNode = service.getData(0, Integer.MAX_VALUE).get();
 
