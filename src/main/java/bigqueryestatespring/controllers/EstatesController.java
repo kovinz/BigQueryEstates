@@ -30,9 +30,7 @@ public class EstatesController {
         if (top < bottom) {
             return new ResponseEntity<>(new RuntimeException(TOP_BORDER_UNDER_BOTTOM_BORDER), HttpStatus.NOT_FOUND);
         }
-        Service service = new EstatesService(
-                List.of(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME),
-                OperationType.AVERAGE);
+        Service service = new EstatesService();
         Optional<JsonNode> result = service.getData(bottom, top);
         return result.isPresent() ? ResponseEntity.ok().body(result.get()) : new ResponseEntity<>(HttpStatus.NO_CONTENT);
     }
