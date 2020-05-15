@@ -1,7 +1,5 @@
 package bigqueryestatespring.nodes;
 
-import bigqueryestatespring.nodes.Node;
-
 import java.util.ArrayList;
 import java.util.List;
 
