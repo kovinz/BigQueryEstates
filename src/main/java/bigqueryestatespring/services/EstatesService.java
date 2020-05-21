@@ -1,80 +1,64 @@
 package bigqueryestatespring.services;
 
-import bigqueryestatespring.exceptionMessages.ExceptionMessage;
+import bigqueryestatespring.nodes.AggregationNode;
 import bigqueryestatespring.nodes.Node;
 import bigqueryestatespring.nodes.NodeWithChildren;
-import bigqueryestatespring.nodes.AggregationNode;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.auth.oauth2.ServiceAccountCredentials;
 import com.google.cloud.bigquery.*;
+import org.jooq.DSLContext;
+import org.jooq.Field;
+import org.jooq.Record1;
+import org.jooq.SelectSelectStep;
+import org.jooq.conf.ParamType;
+import org.jooq.impl.DSL;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Service;
 
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.util.Arrays;
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 import static bigqueryestatespring.exceptionMessages.ExceptionMessage.*;
-import static bigqueryestatespring.services.PropertiesAttribute.*;
+import static org.jooq.impl.DSL.*;
 
-public class EstatesService implements Service {
-    private static String PATH_TO_CREDENTIALS = System.getenv("PATH_TO_GCLOUD_CREDENTIALS");
-    // list of columns to create tree
-    private List<String> columnNames = Arrays.asList(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
-    // aggregate function to process the last element
-    private OperationType operationType = OperationType.AVERAGE;
-    // last element of the tree (will be processed in aggregate function)
-    private String aggregateColumn = PRICE;
-    private String alias = operationType.getStringValue().toLowerCase() + '_' + aggregateColumn;
+
+@Service
+public class EstatesService implements DataService {
+    private static final Logger logger = LoggerFactory.getLogger(EstatesService.class);
+    private static final ExecutorService executorService = Executors
+            .newFixedThreadPool(Runtime.getRuntime().availableProcessors());
+
+    private static ObjectMapper mapper;
+    private static BigQuery bigQuery;
+    private static DSLContext dsl;
+
+    @Autowired
+    @Qualifier("defaultDslContextConfiguration")
+    public void setDsl(DSLContext dslContext) {
+        dsl = dslContext;
+    }
+
+    @Autowired
+    @Qualifier("defaultObjectMapper")
+    private void setMapper(ObjectMapper objectMapper) {
+        mapper = objectMapper;
+    }
+
+    @Autowired
+    private void setBigQuery(BigQuery bigQueryInstance) {
+        bigQuery = bigQueryInstance;
+    }
 
     public EstatesService() {}
-
-    /**
-     *
-     * @param columnNames list of columns to create tree (last element will be processed in aggregate function)
-     * @param operationType aggregate function to process the last element
-     */
-    public EstatesService(List<String> columnNames, OperationType operationType) {
-        this.columnNames = columnNames;
-        if (operationType != null) {
-            this.operationType = operationType;
-            this.alias = operationType.getStringValue().toLowerCase() + '_' + aggregateColumn;
-        }
-    }
-
-    /**
-     * Constructor with default operation type (AVG)
-     *
-     * @param columnNames list of columns to create tree (last element will be processed in aggregate function)
-     */
-    public EstatesService(List<String> columnNames) {
-        this.columnNames = columnNames;
-    }
-
-    /**
-     * Gets bigQuery instance with credentials for estates project
-     *
-     * @return bigQuery instance
-     */
-    private BigQuery getBigQueryInstance() {
-        try {
-            return BigQueryOptions.newBuilder()
-                    .setCredentials(
-                            ServiceAccountCredentials
-                                    .fromStream(new FileInputStream(PATH_TO_CREDENTIALS))
-                    ).build().getService();
-        } catch (FileNotFoundException ex) {
-            ex.printStackTrace();
-            throw new RuntimeException(CREDENTIALS_FILE_NOT_FOUND);
-        } catch (IOException ex) {
-            ex.printStackTrace();
-            throw new RuntimeException(EXCEPTION_WHILE_READING_CREDENTIALS);
-        }
-    }
 
     /**
      * Gets QueryJobConfiguration which contains sql query as
@@ -86,60 +70,31 @@ public class EstatesService implements Service {
      * @param top high border for space
      * @return QueryJobConfiguration
      */
-    private QueryJobConfiguration getQueryJobConfiguration(int bottom, int top) {
-        StringBuilder queryStrBuilder = new StringBuilder("SELECT ");
-        if (columnNames != null && !columnNames.isEmpty()) {
-            for (String columnName : columnNames) {
-                queryStrBuilder.append(columnName).append(", ");
-            }
+    private QueryJobConfiguration getQueryJobConfiguration(List<String> columnNames, String aggregateColumn,
+                                                           int bottom, int top) {
+        Field<Double> price = field(aggregateColumn, Double.class);
+        SelectSelectStep<Record1<BigDecimal>> query = dsl.select(avg(price).as("avg_" + aggregateColumn));
+        if (columnNames != null) {
+            List<Field<Object>> columnNamesFields = columnNames.stream().map(DSL::field).collect(Collectors.toList());
+            query.select(columnNamesFields).groupBy(columnNamesFields);
         }
-        queryStrBuilder.append(operationType.getStringValue()).append('(')
-                .append(aggregateColumn).append(')')
-                .append(" AS ").append(alias).append(' ')
-                .append("FROM `properati-data-public.properties_ar.properties_rent_201501` ")
-                .append("WHERE (surface_covered_in_m2 >= ")
-                .append(bottom)
-                .append(" AND surface_covered_in_m2 <= ")
-                .append(top)
-                .append(") ");
-
-        if (columnNames != null && !columnNames.isEmpty()) {
-            queryStrBuilder.append("GROUP BY ").append(columnNames.get(0));
-            for (String columnName : columnNames.subList(1, columnNames.size())) {
-                queryStrBuilder.append(", ").append(columnName);
-            }
-        }
-
+        query.from(table("`properati-data-public.properties_ar.properties_rent_201501`"))
+                .where(field("surface_covered_in_m2").greaterOrEqual(bottom)
+                        .and(field("surface_covered_in_m2").lessOrEqual(top)));
         return QueryJobConfiguration
-                    .newBuilder(queryStrBuilder.toString())
+                    .newBuilder(query.getSQL(ParamType.INLINED))
                     .setUseLegacySql(false)
                     .build();
     }
 
-    private TableResult getTableResultOfEstates(int bottom, int top) {
-        BigQuery bigquery = getBigQueryInstance();
-
-        QueryJobConfiguration queryConfig = getQueryJobConfiguration(bottom, top);
+    private Future<TableResult> getTableResultOfEstates(List<String> columnNames, String aggregateColumn,
+                                                        int bottom, int top) {
+        QueryJobConfiguration queryConfig = getQueryJobConfiguration(columnNames, aggregateColumn, bottom, top);
 
         JobId jobId = JobId.of(UUID.randomUUID().toString());
-        Job queryJob = bigquery.create(JobInfo.newBuilder(queryConfig).setJobId(jobId).build());
+        Job queryJob = bigQuery.create(JobInfo.newBuilder(queryConfig).setJobId(jobId).build());
 
-        try {
-            // Wait for the query to complete.
-            queryJob = queryJob.waitFor();
-
-            // Check for errors
-            if (queryJob == null) {
-                throw new RuntimeException(ExceptionMessage.JOB_NO_LONGER_EXISTS);
-            } else if (queryJob.getStatus().getError() != null) {
-                throw new RuntimeException(queryJob.getStatus().getError().toString());
-            }
-
-            return queryJob.getQueryResults();
-        } catch (Exception ex) {
-            ex.printStackTrace();
-            throw new RuntimeException(ex.getMessage());
-        }
+        return executorService.submit(new RunJob(queryJob));
     }
 
     /**
@@ -150,15 +105,12 @@ public class EstatesService implements Service {
      * @param tableResult query result received from bigQuery
      * @return root node of constructed tree
      */
-    private NodeWithChildren createTree(TableResult tableResult) {
-        if (tableResult == null) {
-            throw new RuntimeException(TABLE_RESULT_IS_NULL);
-        }
-        NodeWithChildren root = new NodeWithChildren("");
+    private List<Node> createTree(List<String> columnNames, String aggregateColumn, TableResult tableResult) {
+        List<Node> rootList = new ArrayList<>();
 
-        tableResult.iterateAll().forEach(row -> createBranch(root, row));
+        tableResult.iterateAll().forEach(row -> createBranch(columnNames, aggregateColumn, rootList, row));
 
-        return root;
+        return rootList;
     }
 
     /**
@@ -167,10 +119,11 @@ public class EstatesService implements Service {
      *  if not present then creates new value on this level;
      * always create new value on the last level of tree.
      *
-     * @param current starting node (== root)
+     * @param currentList starting node (== root)
      * @param row - row from TableResult with values for particular row in query result from database
      */
-    private void createBranch(NodeWithChildren current, FieldValueList row) {
+    private void createBranch(List<String> columnNames, String aggregateColumn,
+                              List<Node> currentList, FieldValueList row) {
         boolean exists;
         String columnValue;
         // Go through all column names except for the last one
@@ -178,10 +131,10 @@ public class EstatesService implements Service {
             for (String columnName : columnNames) {
                 exists = false;
                 columnValue = row.get(columnName).getStringValue();
-                for (Node node : current.getChildren()) {
+                for (Node node : currentList) {
                     // If node with the same data already exists - make it 'current'
                     if (node.checkEqualData(columnValue)) {
-                        current = (NodeWithChildren) node;
+                        currentList = ((NodeWithChildren) node).getChildren();
                         exists = true;
                         break;
                     }
@@ -189,14 +142,14 @@ public class EstatesService implements Service {
                 // If node with the same data doesn't exist - create it and then make it 'current'
                 if (!exists) {
                     NodeWithChildren newNode = new NodeWithChildren(columnValue);
-                    current.addChild(newNode);
-                    current = newNode;
+                    currentList.add(newNode);
+                    currentList = newNode.getChildren();
                 }
             }
         }
         // Last element is processed outside 'for' because we want to create different type of Node
-        columnValue = row.get(alias).getStringValue();
-        current.addChild(new AggregationNode(columnValue));
+        columnValue = row.get("avg_" + aggregateColumn).getStringValue();
+        currentList.add(new AggregationNode(columnValue));
     }
 
     /**
@@ -205,17 +158,15 @@ public class EstatesService implements Service {
      * @param root element from which the tree starts
      * @return Object which serializes to json consisting tree when returned with REST
      */
-    private Optional<JsonNode> constructJson(NodeWithChildren root) {
-        if (root == null || root.getChildren().isEmpty()) {
+    private Optional<JsonNode> constructJson(List<Node> root) {
+        if (root == null || root.isEmpty()) {
             return Optional.empty();
         }
         try {
-            ObjectMapper mapper = new ObjectMapper();
             String json = mapper.writeValueAsString(root);
 
             return Optional.of(mapper.readTree(json));
         } catch (JsonProcessingException ex) {
-            ex.printStackTrace();
             throw new RuntimeException(EXCEPTION_WHILE_CREATE_JSON);
         }
     }
@@ -223,69 +174,56 @@ public class EstatesService implements Service {
     /**
      * Main method - gets tree with levels of columnNames with estates restricted by space by bottom and top
      *
+     * @param columnNames list of columns to create tree
+     * @param aggregateColumn last element of the tree (will be processed in aggregate function)
      * @param bottom low border of space for estate
      * @param top high border of space for estate
      * @return Object which serializes to tree json
      */
-    public Optional<JsonNode> getData(int bottom, int top) {
+    public Optional<JsonNode> getData(List<String> columnNames, String aggregateColumn, int bottom, int top) {
         if (bottom > top) {
             throw new RuntimeException(TOP_BORDER_UNDER_BOTTOM_BORDER);
         }
-        TableResult result = getTableResultOfEstates(bottom, top);
-        if (result.getTotalRows() == 0) {
+        if (aggregateColumn == null) {
+            throw new RuntimeException(AGGREGATE_COLUMN_IS_NULL);
+        }
+        Future<TableResult> resultFuture = getTableResultOfEstates(columnNames, aggregateColumn, bottom, top);
+        TableResult result;
+        try {
+            result = resultFuture.get();
+        } catch (InterruptedException | ExecutionException ex) {
+            logger.error(ERROR_WHILE_PROCESSING_QUERY);
+            return Optional.empty();
+        }
+        if (result == null || result.getTotalRows() == 0) {
             return Optional.empty();
         }
 
-        NodeWithChildren root = createTree(result);
+        List<Node> root = createTree(columnNames, aggregateColumn, result);
         return constructJson(root);
     }
 
-    public String getAggregateColumn() {
-        return aggregateColumn;
-    }
+    static class RunJob implements Callable<TableResult> {
+        Job queryJob;
 
-    public void setAggregateColumn(String aggregateColumn) {
-        this.aggregateColumn = aggregateColumn;
-    }
-
-    public static Builder builder() {
-        return new Builder();
-    }
-
-    public static final class Builder {
-        // list of columns to create tree
-        private List<String> columnNames = Arrays.asList(OPERATION, PROPERTY_TYPE, COUNTRY_NAME, STATE_NAME);
-        // aggregate function to process the last element
-        private OperationType operationType = OperationType.AVERAGE;
-        // last element of the tree (will be processed in aggregate function)
-        private String aggregateColumn = PRICE;
-
-        private Builder() {
+        RunJob(Job queryJob) {
+            this.queryJob = queryJob;
         }
 
-        public static Builder anEstatesService() {
-            return new Builder();
-        }
 
-        public Builder withColumnNames(List<String> columnNames) {
-            this.columnNames = columnNames;
-            return this;
-        }
+        @Override
+        public TableResult call() throws Exception {
+            // Wait for the query to complete.
+            queryJob = queryJob.waitFor();
+            if (queryJob == null) {
+                logger.error(JOB_NO_LONGER_EXISTS);
+                return null;
+            } else if (queryJob.getStatus().getError() != null) {
+                logger.error(ERROR_WHILE_PROCESSING_QUERY);
+                return null;
+            }
 
-        public Builder withOperationType(OperationType operationType) {
-            this.operationType = operationType;
-            return this;
-        }
-
-        public Builder withAggregateColumn(String aggregateColumn) {
-            this.aggregateColumn = aggregateColumn;
-            return this;
-        }
-
-        public EstatesService build() {
-            EstatesService estatesService = new EstatesService(columnNames, operationType);
-            estatesService.setAggregateColumn(aggregateColumn);
-            return estatesService;
+            return queryJob.getQueryResults();
         }
     }
 }
