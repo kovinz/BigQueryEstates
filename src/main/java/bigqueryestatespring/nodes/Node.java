@@ -1,33 +1,17 @@
-package bigqueryestatespring;
+package bigqueryestatespring.nodes;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 
-public class Node {
-    private final String data;
-    private List<Node> children;
+public abstract class Node {
+    protected final String data;
 
     public Node(String data) {
         this.data = data;
     }
 
+    //    @JsonGetter(value = "data")
     public String getData() {
         return data;
-    }
-
-    public List<Node> getChildren() {
-        if (children == null) {
-            children = new ArrayList<>();
-        }
-        return children;
-    }
-
-    public void addChild(Node newChild) {
-        if (children == null) {
-            children = new ArrayList<>();
-        }
-        children.add(newChild);
     }
 
     public boolean checkEqualData(String data) {
@@ -38,7 +22,7 @@ public class Node {
     public boolean equals(Object o) {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
-        Node node = (Node) o;
+        Node node = (NodeWithChildren) o;
         return data.equals(node.data);
     }
 
